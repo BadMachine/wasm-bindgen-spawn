@@ -23,7 +23,6 @@ use futures::future::{LocalBoxFuture, Either};
 type MaybeFuture<T> = Either<T, LocalBoxFuture<'static, T>>;
 
 type BoxClosure<T> = Box<dyn FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static>;
-type WasmClosure = Box<dyn FnOnce() -> MaybeFuture<BoxValue> + Send + UnwindSafe + 'static>;
 
 type BoxValue = Box<dyn Send + 'static>;
 type ValueSender = oneshot::Sender<Result<BoxValue, JoinError>>;
@@ -370,7 +369,7 @@ fn make_closure<F: FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static, T: 
 
 #[doc(hidden)]
 #[wasm_bindgen]
-pub async fn __worker_main(f: NonNull<WasmClosure>) -> NonNull<BoxValue> {
+pub async fn __worker_main(f: NonNull<BoxClosure<BoxValue>>) -> NonNull<BoxValue> {
     let f = unsafe { Box::from_raw(f.as_ptr()) };
 
     let value = match f() {
@@ -448,7 +447,7 @@ pub fn __dispatch_poll_worker(start_recv: NonNull<SignalReceiver>) -> bool {
 /// Drop the receiver
 #[doc(hidden)]
 #[wasm_bindgen]
-pub fn __dispatch_drop(recv: NonNull<mpsc::Receiver<WasmClosure>>) {
-    let recv: Box<mpsc::Receiver<WasmClosure>> = unsafe { Box::from_raw(recv.as_ptr()) };
+pub fn __dispatch_drop(recv: NonNull<mpsc::Receiver<BoxClosure<BoxValue>>>) {
+    let recv: Box<mpsc::Receiver<BoxClosure<BoxValue>>> = unsafe { Box::from_raw(recv.as_ptr()) };
     drop(recv);
 }
