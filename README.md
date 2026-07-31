@@ -5,6 +5,11 @@
 ![License Badge](https://img.shields.io/github/license/Pistonite/wasm-bindgen-spawn)
 ![Issue Badge](https://img.shields.io/github/issues/Pistonite/wasm-bindgen-spawn)
 
+# Differences from the original repo:
+- Support async closures (MaybePromise)
+- Support web target for wasm-pack
+- core scripts rewritten in typescript
+
 A Web Worker based multithreading library for Rust and WebAssembly.
 
 This uses the WebAssembly [threads proposal](https://github.com/WebAssembly/threads/blob/master/proposals/threads/Overview.md)
