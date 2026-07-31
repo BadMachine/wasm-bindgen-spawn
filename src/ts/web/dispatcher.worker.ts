@@ -28,7 +28,7 @@ self.onmessage = async (event: MessageEvent<DispatcherWorkerPayload>) => {
 		wasm_bindgen.api.__dispatch_start(start);
 		started = true;
 
-		const value = wasm_bindgen.api.__worker_main(f, start);
+		const value = await wasm_bindgen.api.__worker_main(f, start);
 
 		wasm_bindgen.api.__worker_send(id, send, value);
 
