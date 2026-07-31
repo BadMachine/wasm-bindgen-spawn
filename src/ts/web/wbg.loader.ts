@@ -2,7 +2,7 @@ export type WBGLoaderResult = {
 	init: Function;
 	api: {
 		__dispatch_start(ptr: StartSend): void;
-		__dispatch_recv(ptr: NonNullable<Receiver>): Option<[id: number, closure: Function, senderPtr: Pointer<'sender_ptr'>, startSendPtr: StartSend, startRecvPtr: StartReceive]>;
+		__dispatch_recv<T>(ptr: NonNullable<Receiver>): Option<[id: number, closure: MaybeAsyncFn<T>, senderPtr: Pointer<'sender_ptr'>, startSendPtr: StartSend, startRecvPtr: StartReceive]>;
 		__dispatch_poll_worker(ptr: StartReceive): boolean;
 		__dispatch_drop(ptr: Receiver): void;
 		__worker_main(f: NonNullable<Function>, start: StartSend): Pointer<'value_ptr'>;
