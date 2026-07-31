@@ -18,9 +18,9 @@ use wasm_bindgen::prelude::*;
 #[cfg(feature = "async")]
 use wasm_bindgen_futures::JsFuture;
 
-use futures::future::{BoxFuture, Either};
+use futures::future::{LocalBoxFuture, Either};
 
-type MaybeFuture<T> = Either<T, BoxFuture<'static, T>>;
+type MaybeFuture<T> = Either<T, LocalBoxFuture<'static, T>>;
 
 type BoxClosure<T> = Box<dyn FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static>;
 type WasmClosure = Box<dyn FnOnce() -> MaybeFuture<BoxValue> + Send + UnwindSafe + 'static>;
