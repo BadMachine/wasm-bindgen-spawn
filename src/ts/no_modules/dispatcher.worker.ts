@@ -16,7 +16,7 @@ self.onmessage = async (event: MessageEvent<DispatcherWorkerPayload>) => {
 		wasm_bindgen.__dispatch_start(start);
 		started = true;
 
-		const value = wasm_bindgen.__worker_main(f, start);
+		const value = await wasm_bindgen.__worker_main(f, start);
 		wasm_bindgen.__worker_send(id, send, value);
 	} catch (e) {
 		self.console.error(e);

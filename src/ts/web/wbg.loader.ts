@@ -5,7 +5,7 @@ export type WBGLoaderResult = {
 		__dispatch_recv<T>(ptr: NonNullable<Receiver>): Option<[id: number, closure: MaybeAsyncFn<T>, senderPtr: Pointer<'sender_ptr'>, startSendPtr: StartSend, startRecvPtr: StartReceive]>;
 		__dispatch_poll_worker(ptr: StartReceive): boolean;
 		__dispatch_drop(ptr: Receiver): void;
-		__worker_main(f: NonNullable<Function>, start: StartSend): Pointer<'value_ptr'>;
+		__worker_main(f: NonNullable<Function>, start: StartSend): Pointer<'value_ptr'> | Promise<Pointer<'value_ptr'>>;
 		__worker_send(id: number, send: number, value?: unknown): void;
 	}
 }

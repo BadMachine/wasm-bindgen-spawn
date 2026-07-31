@@ -40,7 +40,7 @@ declare global {
 		__worker_main<T>(
 			f: NonNullable<MaybeAsyncFn<T>>,
 			start: StartSend
-		): Pointer<"value_ptr">;
+		): Promise<Pointer<"value_ptr">> | Pointer<"value_ptr">;
 
 		__worker_send(
 			id: number,
