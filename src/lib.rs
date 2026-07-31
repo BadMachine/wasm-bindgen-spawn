@@ -18,14 +18,20 @@ use wasm_bindgen::prelude::*;
 #[cfg(feature = "async")]
 use wasm_bindgen_futures::JsFuture;
 
-type BoxClosure = Box<dyn FnOnce() -> BoxValue + Send + UnwindSafe + 'static>;
+use futures::future::{BoxFuture, Either};
+
+type MaybeFuture<T> = Either<T, BoxFuture<'static, T>>;
+
+type BoxClosure<T> = Box<dyn FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static>;
+type WasmClosure = Box<dyn FnOnce() -> MaybeFuture<BoxValue> + Send + UnwindSafe + 'static>;
+
 type BoxValue = Box<dyn Send + 'static>;
 type ValueSender = oneshot::Sender<Result<BoxValue, JoinError>>;
 type ValueReceiver = oneshot::Receiver<Result<BoxValue, JoinError>>;
 
-type DispatchPayload = (usize, BoxClosure, ValueSender);
-type DispatchSender = mpsc::Sender<DispatchPayload>;
-type DispatchReceiver = mpsc::Receiver<DispatchPayload>;
+type DispatchPayload<T> = (usize, BoxClosure<T>, ValueSender);
+type DispatchSender<T> = mpsc::Sender<DispatchPayload<T>>;
+type DispatchReceiver<T> = mpsc::Receiver<DispatchPayload<T>>;
 
 type SignalSender = oneshot::Sender<()>;
 type SignalReceiver = oneshot::Receiver<()>;
@@ -198,22 +204,22 @@ extern "C" {
 ///     handle.join().unwrap();
 /// }
 /// ```
-pub struct ThreadCreator {
+pub struct ThreadCreator<T> {
     /// Id for the next thread
     next_id: AtomicUsize,
     /// Sender to send the thread closure to the dispatcher for creating threads
-    send: DispatchSender,
+    send: DispatchSender<T>,
 }
-static_assertions::assert_impl_all!(ThreadCreator: Send, Sync);
+static_assertions::assert_impl_all!(ThreadCreator<BoxValue>: Send, Sync);
 
 /// See [`ThreadCreator::unready`] for more information
-pub struct ThreadCreatorUnready {
-    thread_creator: ThreadCreator,
+pub struct ThreadCreatorUnready<T> {
+    thread_creator: ThreadCreator<T>,
     /// Promise for if the dispatcher is ready
     dispatcher_promise: Promise,
 }
 
-impl ThreadCreatorUnready {
+impl <T>ThreadCreatorUnready<T> {
     /// Returns the promise that resolves when the dispatcher is ready,
     /// and the inner [`ThreadCreator`]. Note that the inner creator
     /// can only be used after awaiting on the Promise.
@@ -222,7 +228,7 @@ impl ThreadCreatorUnready {
     /// instead
     ///
     /// See the struct documentation for more information
-    pub fn into_promise_and_inner(self) -> (Promise, ThreadCreator) {
+    pub fn into_promise_and_inner(self) -> (Promise, ThreadCreator<T>) {
         (self.dispatcher_promise, self.thread_creator)
     }
 
@@ -230,18 +236,18 @@ impl ThreadCreatorUnready {
     ///
     /// See the struct documentation for more information
     #[cfg(feature = "async")]
-    pub async fn ready(self) -> Result<ThreadCreator, JsValue> {
+    pub async fn ready(self) -> Result<ThreadCreator<T>, JsValue> {
         JsFuture::from(self.dispatcher_promise).await?;
         Ok(self.thread_creator)
     }
 }
 
-impl ThreadCreator {
+impl <T>ThreadCreator<T> {
     /// Create a Web Worker to dispatch threads with the wasm module url and the
     /// wasm_bindgen JS url. The Worker may not be ready until `ready` is awaited
     ///
     /// See the struct documentation for more information
-    pub fn unready(wasm_url: &str, wbg_url: &str) -> Result<ThreadCreatorUnready, JsValue> {
+    pub fn unready(wasm_url: &str, wbg_url: &str) -> Result<ThreadCreatorUnready<T>, JsValue> {
         // function([wasm_url, wbg_url, memory, recv]) -> Promise<void>;
 
         let dispatcher_source = {
@@ -261,7 +267,7 @@ impl ThreadCreator {
         let wasm_url = JsValue::from_str(wasm_url);
         let wbg_url = JsValue::from_str(wbg_url);
         let memory = MEMORY.with(|memory| memory.clone());
-        let (send, recv) = mpsc::channel::<DispatchPayload>();
+        let (send, recv) = mpsc::channel::<DispatchPayload<T>>();
         let recv_ptr = JsValue::from(NonNull::from(Box::leak(Box::new(recv))));
         let (start_send, start_recv) = oneshot::channel::<()>();
         let start_send = Box::into_raw(Box::new(start_send));
@@ -294,16 +300,16 @@ impl ThreadCreator {
     /// Spawn a new thread to execute F.
     ///
     /// Note that spawning new thread is very slow. Pool them if you can.
-    pub fn spawn<F, T>(&self, f: F) -> Result<JoinHandle<T>, SpawnError>
+    pub fn spawn<F>(&self, f: F) -> Result<JoinHandle<T>, SpawnError>
     where
-        F: FnOnce() -> T + Send + 'static + UnwindSafe,
+        F: FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static,
         T: Send + 'static,
     {
         let next_id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // make a closure that returns the value boxed
-        let closure: BoxClosure = Box::new(move || Box::new(f()));
+        let closure: BoxClosure<T> = Box::new(f);
         let (send, recv) = oneshot::channel();
         let payload = (next_id, closure, send);
         self.send
@@ -355,18 +361,23 @@ impl<T: Send + 'static> JoinHandle<T> {
 }
 
 #[inline]
-fn make_closure<F: FnOnce() -> BoxValue + Send + 'static + UnwindSafe>(
+fn make_closure<F: FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static, T: Send + 'static>(
     f: F,
-) -> NonNull<BoxClosure> {
-    let boxed: BoxClosure = Box::new(f);
+) -> NonNull<BoxClosure<T>> {
+    let boxed: BoxClosure<T> = Box::new(f);
     NonNull::from(Box::leak(Box::new(boxed)))
 }
 
 #[doc(hidden)]
 #[wasm_bindgen]
-pub fn __worker_main(f: NonNull<BoxClosure>) -> NonNull<BoxValue> {
+pub async fn __worker_main(f: NonNull<WasmClosure>) -> NonNull<BoxValue> {
     let f = unsafe { Box::from_raw(f.as_ptr()) };
-    let value = f();
+
+    let value = match f() {
+        Either::Left(v) => v,
+        Either::Right(promised_value) => promised_value.await
+    };
+
     let value_ptr = Box::into_raw(Box::new(value));
     unsafe { NonNull::new_unchecked(value_ptr) }
 }
@@ -399,9 +410,9 @@ pub fn __dispatch_start(start: NonNull<SignalSender>) {
 /// Receive a request to spawn a thread with the dispatcher.
 #[doc(hidden)]
 #[wasm_bindgen]
-pub fn __dispatch_recv(recv: NonNull<DispatchReceiver>) -> Option<Vec<JsValue>> {
+pub fn __dispatch_recv(recv: NonNull<DispatchReceiver<BoxValue>>) -> Option<Vec<JsValue>> {
     // cast as reference so we don't drop it
-    let recv: &DispatchReceiver = unsafe { recv.as_ref() };
+    let recv: &DispatchReceiver<BoxValue> = unsafe { recv.as_ref() };
     let (id, closure, sender) = match recv.recv() {
         Ok(v) => v,
         Err(_) => return None,
@@ -437,7 +448,7 @@ pub fn __dispatch_poll_worker(start_recv: NonNull<SignalReceiver>) -> bool {
 /// Drop the receiver
 #[doc(hidden)]
 #[wasm_bindgen]
-pub fn __dispatch_drop(recv: NonNull<mpsc::Receiver<BoxClosure>>) {
-    let recv: Box<mpsc::Receiver<BoxClosure>> = unsafe { Box::from_raw(recv.as_ptr()) };
+pub fn __dispatch_drop(recv: NonNull<mpsc::Receiver<WasmClosure>>) {
+    let recv: Box<mpsc::Receiver<WasmClosure>> = unsafe { Box::from_raw(recv.as_ptr()) };
     drop(recv);
 }

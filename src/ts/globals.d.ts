@@ -3,6 +3,8 @@ export {}
 declare global {
 	const __phantom: unique symbol;
 
+	type MaybeAsyncFn<T> = { (...args: unknown[]): T } | { (...args: unknown[]): Promise<T> }
+
 	type Option<T> = T | null;
 
 	type Pointer<T extends string> = number & {
@@ -21,11 +23,11 @@ declare global {
 
 		__dispatch_start(ptr: StartSend): void;
 
-		__dispatch_recv(
+		__dispatch_recv<T>(
 			ptr: NonNullable<Receiver>
 		): Option<[
 			id: number,
-			closure: Function,
+			closure: MaybeAsyncFn<T>,
 			senderPtr: Pointer<"sender_ptr">,
 			startSendPtr: StartSend,
 			startRecvPtr: StartReceive
@@ -35,8 +37,8 @@ declare global {
 
 		__dispatch_drop(ptr: Receiver): void;
 
-		__worker_main(
-			f: NonNullable<Function>,
+		__worker_main<T>(
+			f: NonNullable<MaybeAsyncFn<T>>,
 			start: StartSend
 		): Pointer<"value_ptr">;
 
