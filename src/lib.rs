@@ -29,9 +29,9 @@ type BoxValue = Box<dyn Send + 'static>;
 type ValueSender = oneshot::Sender<Result<BoxValue, JoinError>>;
 type ValueReceiver = oneshot::Receiver<Result<BoxValue, JoinError>>;
 
-type DispatchPayload<T> = (usize, BoxClosure<T>, ValueSender);
-type DispatchSender<T> = mpsc::Sender<DispatchPayload<T>>;
-type DispatchReceiver<T> = mpsc::Receiver<DispatchPayload<T>>;
+type DispatchPayload = (usize, BoxClosure<BoxValue>, ValueSender);
+type DispatchSender = mpsc::Sender<DispatchPayload>;
+type DispatchReceiver = mpsc::Receiver<DispatchPayload>;
 
 type SignalSender = oneshot::Sender<()>;
 type SignalReceiver = oneshot::Receiver<()>;
@@ -204,22 +204,22 @@ extern "C" {
 ///     handle.join().unwrap();
 /// }
 /// ```
-pub struct ThreadCreator<T> {
+pub struct ThreadCreator {
     /// Id for the next thread
     next_id: AtomicUsize,
     /// Sender to send the thread closure to the dispatcher for creating threads
-    send: DispatchSender<T>,
+    send: DispatchSender,
 }
-static_assertions::assert_impl_all!(ThreadCreator<BoxValue>: Send, Sync);
+static_assertions::assert_impl_all!(ThreadCreator: Send, Sync);
 
 /// See [`ThreadCreator::unready`] for more information
-pub struct ThreadCreatorUnready<T> {
-    thread_creator: ThreadCreator<T>,
+pub struct ThreadCreatorUnready {
+    thread_creator: ThreadCreator,
     /// Promise for if the dispatcher is ready
     dispatcher_promise: Promise,
 }
 
-impl <T>ThreadCreatorUnready<T> {
+impl ThreadCreatorUnready {
     /// Returns the promise that resolves when the dispatcher is ready,
     /// and the inner [`ThreadCreator`]. Note that the inner creator
     /// can only be used after awaiting on the Promise.
@@ -228,7 +228,7 @@ impl <T>ThreadCreatorUnready<T> {
     /// instead
     ///
     /// See the struct documentation for more information
-    pub fn into_promise_and_inner(self) -> (Promise, ThreadCreator<T>) {
+    pub fn into_promise_and_inner(self) -> (Promise, ThreadCreator) {
         (self.dispatcher_promise, self.thread_creator)
     }
 
@@ -236,18 +236,18 @@ impl <T>ThreadCreatorUnready<T> {
     ///
     /// See the struct documentation for more information
     #[cfg(feature = "async")]
-    pub async fn ready(self) -> Result<ThreadCreator<T>, JsValue> {
+    pub async fn ready(self) -> Result<ThreadCreator, JsValue> {
         JsFuture::from(self.dispatcher_promise).await?;
         Ok(self.thread_creator)
     }
 }
 
-impl <T>ThreadCreator<T> {
+impl ThreadCreator {
     /// Create a Web Worker to dispatch threads with the wasm module url and the
     /// wasm_bindgen JS url. The Worker may not be ready until `ready` is awaited
     ///
     /// See the struct documentation for more information
-    pub fn unready(wasm_url: &str, wbg_url: &str) -> Result<ThreadCreatorUnready<T>, JsValue> {
+    pub fn unready(wasm_url: &str, wbg_url: &str) -> Result<ThreadCreatorUnready, JsValue> {
         // function([wasm_url, wbg_url, memory, recv]) -> Promise<void>;
 
         let dispatcher_source = {
@@ -267,7 +267,7 @@ impl <T>ThreadCreator<T> {
         let wasm_url = JsValue::from_str(wasm_url);
         let wbg_url = JsValue::from_str(wbg_url);
         let memory = MEMORY.with(|memory| memory.clone());
-        let (send, recv) = mpsc::channel::<DispatchPayload<T>>();
+        let (send, recv) = mpsc::channel::<DispatchPayload>();
         let recv_ptr = JsValue::from(NonNull::from(Box::leak(Box::new(recv))));
         let (start_send, start_recv) = oneshot::channel::<()>();
         let start_send = Box::into_raw(Box::new(start_send));
@@ -300,16 +300,16 @@ impl <T>ThreadCreator<T> {
     /// Spawn a new thread to execute F.
     ///
     /// Note that spawning new thread is very slow. Pool them if you can.
-    pub fn spawn<F>(&self, f: F) -> Result<JoinHandle<T>, SpawnError>
+    pub fn spawn<F, T>(&self, f: F) -> Result<JoinHandle<T>, SpawnError>
     where
-        F: FnOnce() -> MaybeFuture<T> + Send + UnwindSafe + 'static,
+        F: FnOnce() -> MaybeFuture<BoxValue> + Send + UnwindSafe + 'static,
         T: Send + 'static,
     {
         let next_id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // make a closure that returns the value boxed
-        let closure: BoxClosure<T> = Box::new(f);
+        let closure: BoxClosure<BoxValue> = Box::new(f);
         let (send, recv) = oneshot::channel();
         let payload = (next_id, closure, send);
         self.send
@@ -410,9 +410,9 @@ pub fn __dispatch_start(start: NonNull<SignalSender>) {
 /// Receive a request to spawn a thread with the dispatcher.
 #[doc(hidden)]
 #[wasm_bindgen]
-pub fn __dispatch_recv(recv: NonNull<DispatchReceiver<BoxValue>>) -> Option<Vec<JsValue>> {
+pub fn __dispatch_recv(recv: NonNull<DispatchReceiver>) -> Option<Vec<JsValue>> {
     // cast as reference so we don't drop it
-    let recv: &DispatchReceiver<BoxValue> = unsafe { recv.as_ref() };
+    let recv: &DispatchReceiver = unsafe { recv.as_ref() };
     let (id, closure, sender) = match recv.recv() {
         Ok(v) => v,
         Err(_) => return None,
